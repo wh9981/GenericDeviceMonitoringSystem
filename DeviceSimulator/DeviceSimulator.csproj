@@ -86,7 +86,7 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </ApplicationDefinition>
-    <Compile Include="util\BinaryReader.cs" />
+    <Compile Include="util\BinaryFileReader.cs" />
     <Compile Include="util\CircularQueue.cs" />
     <Compile Include="util\CustomTcpServer.cs" />
     <Compile Include="util\DroneLibrary.cs" />

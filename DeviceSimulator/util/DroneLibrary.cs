@@ -1,5 +1,4 @@
-﻿using AddOnSimulator_SepVer.util.Model;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -12,7 +11,7 @@ namespace Util
 {
     public static class DroneLibrary
     {
-        public static DroneLibraryModel model = new DroneLibraryModel();
+        /*public static DroneLibraryModel model = new DroneLibraryModel();
 
         public static bool LoadFromJson(string folderPath)
         {
@@ -20,7 +19,7 @@ namespace Util
 
             if (!File.Exists(jsonFilePath))
                 return false;
-                /*throw new FileNotFoundException($"JSON 파일이 존재하지 않습니다: {jsonFilePath}");*/
+                *//*throw new FileNotFoundException($"JSON 파일이 존재하지 않습니다: {jsonFilePath}");*//*
 
             string jsonContent = File.ReadAllText(jsonFilePath);
 
@@ -63,6 +62,6 @@ namespace Util
         public static DroneLibraryModel.DroneInfo GetDroneByCode(int code)
         {
             return model.list.FirstOrDefault(d => d.code == code);
-        }
+        }*/
     }
 }
