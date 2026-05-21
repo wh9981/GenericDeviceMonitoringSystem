@@ -92,7 +92,7 @@
     <Compile Include="util\DroneLibrary.cs" />
     <Compile Include="util\StandardTcpServer.cs" />
     <Compile Include="util\StandardUdpServer.cs" />
-    <Compile Include="util\UdpServer.cs" />
+    <Compile Include="util\UdpSender.cs" />
     <Compile Include="util\WebSocketServer.cs" />
     <Page Include="MainWindow.xaml">
       <Generator>MSBuild:Compile</Generator>

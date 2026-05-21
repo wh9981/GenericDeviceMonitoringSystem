@@ -8,6 +8,10 @@ namespace Util
 {
     public class BinaryFileReader
     {
+        /// <summary>
+        /// 특정 경로의 .bin 파일을 읽어 송신 메서드에 전달하는 클래스
+        /// </summary>
+
         private CancellationTokenSource _lts;    // 외부 CTS를 기반으로 LinkedTokenSource 생성
 
         private string FolderPath { get; set; }
@@ -87,7 +91,6 @@ namespace Util
                         try
                         {
                             bool result = await sendMethods(packets, token);
-                            DataSendEvent?.Invoke(" - " + "데이터 송신.");
                             if (!result)
                                 break;
                         }
@@ -95,14 +98,14 @@ namespace Util
                         {
                             if (ex is OperationCanceledException)
                             {
-                                DataSendEvent?.Invoke(" - 데이터 송신 중지.");
+                                DataSendEvent?.Invoke("Stop Read File Task");
                                 return;
                             }
 
-                            DataSendEvent?.Invoke(" - err : " + ex.Message);
+                            DataSendEvent?.Invoke($"{ex.Message} in ReadFile");
                             return;
                         }
-                        Console.WriteLine(fileName + "읽기 완료");
+                        // Console.WriteLine(fileName + "읽기 완료");
                     }
                 }
             }
