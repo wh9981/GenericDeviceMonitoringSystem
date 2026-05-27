@@ -2,8 +2,6 @@
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
-using System.Text.Json;
-using System.Text;
 using System.Threading.Tasks;
 using System.Threading;
 
@@ -22,6 +20,7 @@ namespace Util
         private bool isConnect = false;
         private bool isSendOnly = false;
 
+        private int timer = 60000;
 
         /*
             특정 흐름에 대한 상태 제어용 TCP Server 구현
@@ -53,13 +52,13 @@ namespace Util
         {
             isConnect = false;
             _cts?.Cancel();
-            ReturnTCPProperty();
+            ReturnConnectionProperty();
             server?.Stop();
         }
 
         public bool IsConnectClient()
         {
-            return client != null && client.Connected && stream.CanWrite;
+            return client != null && client.Connected && stream != null && stream.CanWrite;
         }
 
         private async Task RunServer()
@@ -68,7 +67,7 @@ namespace Util
             {
                 if (isConnect)
                 {
-                    if (client == null || !client.Connected || !stream.CanRead)
+                    if (client == null || !client.Connected)
                     {
                         MessageSendEvent?.Invoke("Connecting...");
                         client = await server.AcceptTcpClientAsync();
@@ -83,14 +82,14 @@ namespace Util
             }
             catch (Exception ex)
             {
-                if (ex is OperationCanceledException || ex is ObjectDisposedException)
+                if (ex is OperationCanceledException || ex is ObjectDisposedException || ex is SocketException)
                 {
                     MessageSendEvent?.Invoke("서버 종료");
                     return;
                 }
 
                 MessageSendEvent?.Invoke(ex.Message);
-                ReturnTCPProperty();
+                ReturnConnectionProperty();
                 server?.Stop();
             }
         }
@@ -102,15 +101,24 @@ namespace Util
                 byte[] bytes = new byte[512];
                 while (isConnect)
                 {
-                    var i = await ReadAsyncWithTimeout(stream, bytes, 0, bytes.Length, 0, _cts.Token);
+                    var i = 0;
+                    try
+                    {
+                        i = await CommonMethod.TcpReadAsyncWithTimeout(stream, bytes, 0, bytes.Length, timer, _cts.Token);
 
-                    if (i == -1)
-                    {
-                        continue;
+                        if (i == 0)
+                        {
+                            throw new IOException();
+                        }
                     }
-                    if (i == 0)
+                    catch (Exception ex)
                     {
-                        throw new IOException();
+                        if (ex is TimeoutException)
+                        {
+                            // MessageSendEvent?.Invoke("data 수신 없음.");
+                            continue;
+                        }
+                        throw; // 다른 예외는 상위로 던짐
                     }
 
                     byte[] receiveData = new byte[i];
@@ -118,23 +126,24 @@ namespace Util
                     DataSendEvent?.Invoke(receiveData);
                 }
             }
-            catch (Exception e)
+            catch (Exception ex)
             {
-                if (e is TimeoutException || e is IOException)
+                if (ex is TimeoutException || ex is IOException)
                 {
                     MessageSendEvent?.Invoke("data 수신 없음.");
-                    ReturnTCPProperty();
+                    ReturnConnectionProperty();
                     _ = RunServer();
                 }
+                MessageSendEvent?.Invoke($"{ex.Message}");
             }
         }
 
-        private void ReturnTCPProperty()
+        private void ReturnConnectionProperty()
         {
-            stream?.Close();
-            client?.Close();
             stream?.Dispose();
             client?.Dispose();
+            stream = null;
+            client = null;
         }
 
         public async Task<bool> SendData(byte[] data)
@@ -153,32 +162,11 @@ namespace Util
                 MessageSendEvent?.Invoke(ex.Message);
                 if (isSendOnly)
                 {
-                    ReturnTCPProperty();
+                    ReturnConnectionProperty();
                     _ = RunServer();
                 }
                 return false;
             }
-        }
-
-        private async Task<int> ReadAsyncWithTimeout(NetworkStream stream, byte[] buffer, int offset, int count,
-            int timeoutMilliseconds, CancellationToken cancellationToken)
-        {
-            var readTask = stream.ReadAsync(buffer, offset, count, cancellationToken);
-
-            // Timeout을 위한 Task.Delay 설정
-            var timeoutTask = Task.Delay(Timeout.Infinite, cancellationToken);
-
-            // 먼저 완료된 Task를 기다림
-            var completedTask = await Task.WhenAny(readTask, timeoutTask);
-
-            if (completedTask == timeoutTask)
-            {
-                // 타임아웃이 발생했을 때 처리
-                return -1;
-            }
-
-            // readTask가 완료되었을 때 결과 반환
-            return await readTask;
         }
     }
 }
