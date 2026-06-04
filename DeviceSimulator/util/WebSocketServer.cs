@@ -6,23 +6,22 @@ using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Collections.Concurrent;
 
 namespace Util
 {
 	internal class WebSocketServer
 	{
-        public Action<string, string> MessageReceive;
-
-        private HttpListener httpListener;
-		private System.Net.WebSockets.WebSocket socket;
-		private Dictionary<string, List<System.Net.WebSockets.WebSocket>> wsClientsDict = new Dictionary<string, List<WebSocket>>();
-		private bool running = false;
-
-        private List<string> DeleteURL = new List<string>();
         private SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
+        private ConcurrentDictionary<string, List<WebSocket>> wsClientsDict = new ConcurrentDictionary<string, List<WebSocket>>();
+        private HashSet<string> CloseURL = new HashSet<string>();
+        private HashSet<string> AcceptURL = new HashSet<string>();
+        private HttpListener httpListener;
 
-        public static Action<string> DataSendEvent;
-        public Action LoopClientInput;
+        private bool running = false;
+
+        public event Action<string> LogEvent;
+        public event Action<string, string> DataReceive;
 
 
 		public void RunServer(int port)
@@ -35,24 +34,49 @@ namespace Util
 			httpListener.Prefixes.Clear();
 			httpListener.Prefixes.Add($"http://*:{port}/");
 			httpListener.Start();
-			StartAsync();
+			Task.Run(()=>StartAsync());
 		}
 
-		public async void DownServer()
+		public async Task DownServer()
 		{
-			running = false;
+            try
+            {
+                running = false;
 
-            await _semaphore.WaitAsync();
-            httpListener?.Close();
-			foreach(var key in  wsClientsDict.Keys)
-			{
-                wsClientsDict[key].Clear();
+                await _semaphore.WaitAsync();
+                httpListener?.Close();
+                foreach (var key in wsClientsDict.Keys)
+                {
+                    wsClientsDict[key].Clear();
+                }
+                httpListener = null;
             }
-            httpListener = null;
-            _semaphore.Release();
+            finally
+            {
+                _semaphore.Release();
+            }
         }
 
-		private async void StartAsync()
+        public async Task AddTargetEndPoint(string path)
+        {
+            try
+            {
+                await _semaphore.WaitAsync();
+
+                if (!AcceptURL.Contains(path))
+                    AcceptURL.Add(path);
+            }
+            catch (Exception ex)
+            {
+                LogEvent?.Invoke($"WebsocketServer error : {ex.Message} in AddPath");
+            }
+            finally
+            {
+                _semaphore.Release();
+            }
+        }
+
+		private async Task StartAsync()
 		{
 			try
 			{
@@ -70,8 +94,18 @@ namespace Util
 					}
 				}
 			}
-			catch (HttpListenerException) { }
-			catch (ObjectDisposedException) { }
+            catch (Exception ex)
+            {
+                if (ex is HttpListenerException || ex is ObjectDisposedException)
+                {
+                    // 서버가 중지되었거나 HttpListener가 닫혔을 때 발생하는 예외를 무시
+                    Console.WriteLine("WebSocketServer stopped: " + ex.Message);
+                }
+                else
+                {
+                    LogEvent?.Invoke($"WebsocketServer error : {ex.Message} in StartAsync");
+                }
+            }
 		}
 
 		private async Task HandleHttpRequest(HttpListenerContext context)
@@ -79,47 +113,48 @@ namespace Util
 			var requestUrl = context.Request.Url;
 			var path = requestUrl.AbsolutePath;
 
-			/*if (DeleteURL.Contains(path))
-				return;*/
+            if (CloseURL.Contains(path) || (! await IsAllowedPath(path)))
+            {
+                context.Response.StatusCode = 400;
+                context.Response.Close();
+                return;
+            }
 
             var webSocketContext = await context.AcceptWebSocketAsync(subProtocol: null);
-			socket = webSocketContext.WebSocket;
+			var socket = webSocketContext.WebSocket;
 
-            // await SendMessageAsync(socket, "Websocket Connect!"); // 클라이언트에게 메세지 보내기
+            var clients = wsClientsDict.GetOrAdd(path, _ => new List<WebSocket>());
+            clients.Add(webSocketContext.WebSocket);
 
-            if (DeleteURL.Contains(path))
-                path = "";
+            try
+            {
+                var r = Task.Run(() => RequestFromClient(webSocketContext.WebSocket, path));
+            }
+            catch (Exception ex)
+            {
+                LogEvent?.Invoke($"WebsocketServer error : {ex.Message} in HandleHttpRequest");
+            }
+        }
 
-            switch (path) //TODO 외부에서 주입하는 방식으로 변경 필요. 완전 모듈화
-			{
-				case "/sources":
-				case "/sources/1/trajectories":
-                case "/vms":
-                case "/":
-                    if (!wsClientsDict.ContainsKey(path))
-						wsClientsDict[path] = new List<System.Net.WebSockets.WebSocket>();
-					wsClientsDict[path].Add(webSocketContext.WebSocket);
+        private async Task<bool> IsAllowedPath(string path)
+        {
+            try
+            {
+                await _semaphore.WaitAsync();
+                return AcceptURL.Contains(path);
+            }
+            catch (Exception ex)
+            {
+                LogEvent?.Invoke($"WebsocketServer error : {ex.Message} in IsAllowedPath");
+                return false;
+            }
+            finally
+            {
+                _semaphore.Release();
+            }
+        }
 
-					if (path.Equals("/sources"))
-						LoopClientInput?.Invoke();
-
-					break;
-				default:
-                    context.Response.StatusCode = 400;
-					context.Response.Close();
-					break;
-			}
-			try
-			{
-				var r = Task.Run(() => RequestFromClient(webSocketContext.WebSocket, path));
-			}
-			catch (Exception e)
-			{
-
-			}
-		}
-
-		public async Task RequestFromClient(System.Net.WebSockets.WebSocket sock, string path)
+        private async Task RequestFromClient(System.Net.WebSockets.WebSocket sock, string path)
 		{
 			byte[] buffer = new byte[1024];
 			while (running)
@@ -135,8 +170,8 @@ namespace Util
 					}
                     if (result.MessageType == WebSocketMessageType.Text)
                     {
-                        var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                        MessageReceive?.Invoke(message, path);
+                        var data = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                        DataReceive?.Invoke(data, path);
                     }
                 }
 				catch (WebSocketException ex) when (ex.WebSocketErrorCode == WebSocketError.ConnectionClosedPrematurely)
@@ -146,46 +181,45 @@ namespace Util
 
 					wsClientsDict[path].Remove(sock);
 					sock.Dispose();
-					Console.WriteLine("???");
 				}
 			}
 		}
 
 		public async Task SendMessageToAll_Path(string message, string path)
 		{
-			var buffer = Encoding.UTF8.GetBytes(message);
-
-			try
-			{
-                //await _semaphore.WaitAsync();
+            try
+            {
+                await _semaphore.WaitAsync();
                 if (wsClientsDict.ContainsKey(path))
-				{
-					var clients = wsClientsDict[path].ToList();
-					foreach (var s in clients)
-					{
+                {
+                    var buffer = Encoding.UTF8.GetBytes(message);
+                    var clients = wsClientsDict[path].ToList();
+                    foreach (var s in clients)
+                    {
                         if (s.State == WebSocketState.Aborted)
                         {
                             wsClientsDict[path].Remove(s); // 요소 직접 제거
                             continue;
                         }
                         await s.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
-					}
-				}
-
-                //_semaphore.Release();
+                    }
+                }
             }
-			catch (Exception ex)
+            catch (Exception ex)
             {
-                if (_semaphore.CurrentCount == 0)
-                    _semaphore.Release();
+                LogEvent?.Invoke($"WebsocketServer error : {ex.Message} in SendMessageToAll_Path (string)");
             }
-		}
+            finally
+            {
+                _semaphore.Release();
+            }
+        }
 
         public async Task SendMessageToAll_Path(byte[] buffer, string path)
         {
             try
             {
-                //await _semaphore.WaitAsync();
+                await _semaphore.WaitAsync();
                 if (wsClientsDict.ContainsKey(path))
                 {
                     var clients = wsClientsDict[path].ToList();
@@ -199,58 +233,98 @@ namespace Util
                         await s.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Binary, true, CancellationToken.None);
                     }
                 }
-
-                //_semaphore.Release();
             }
             catch (Exception ex)
             {
-                if (_semaphore.CurrentCount == 0)
-                    _semaphore.Release();
+                LogEvent?.Invoke($"WebsocketServer error : {ex.Message} in SendMessageToAll_Path (byte[])");
+            }
+            finally
+            {
+                _semaphore.Release();
             }
         }
 
         public async Task CloseStreamTargetEndPoint(string path)
         {
+            List<WebSocket> socketsToClose = null;
+
+            try
+            {
+                try
+                {
+                    await _semaphore.WaitAsync();
+                    CloseURL.Add(path);
+                    if (wsClientsDict.TryRemove(path, out var list))
+                    {
+                        socketsToClose = list.ToList();
+                        list.Clear();
+                    }
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+
+                if (socketsToClose == null)
+                    return;
+
+                foreach (var socket in socketsToClose)
+                {
+                    if (socket.State == WebSocketState.Open || socket.State == WebSocketState.CloseReceived)
+                    {
+                        await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Connection closed by server", CancellationToken.None);
+                    }
+
+                    socket.Dispose();
+                }
+            }
+            catch (Exception ex)
+            {
+                LogEvent?.Invoke($"WebsocketServer error : {ex.Message} in CloseStreamTargetEndPoint");
+            }
+        }
+
+		public void OpenStreamTargetEndPoint(string path)
+		{
+            try
+            {
+                if (CloseURL.Contains(path))
+                    CloseURL.Remove(path);
+            }
+            catch (Exception ex)
+            {
+                LogEvent?.Invoke($"WebsocketServer error : {ex.Message} in OpenStreamTargetEndPoint");
+            }
+        }
+
+        public async Task RemoveSocket(WebSocket socket, string path)
+        {
             try
             {
                 await _semaphore.WaitAsync();
-                DeleteURL.Add(path);
-                if (wsClientsDict.TryGetValue(path, out var list))
+
+                if (wsClientsDict.TryGetValue(path, out var clients))
                 {
-                    while (list.Count > 0)
-                        await RemoveSocket(list[list.Count-1], path);
-
-                    wsClientsDict.Remove(path);
+                    clients.Remove(socket);
                 }
+
+                // 안전하게 WebSocket 닫기
+                if (socket.State == WebSocketState.Open || socket.State == WebSocketState.CloseReceived)
+                {
+                    await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Connection closed by server", CancellationToken.None);
+                }
+
+                socket.Dispose();
+                Console.WriteLine($"Socket removed: {path}");
+            }
+            catch (Exception ex)
+            {
+                LogEvent?.Invoke($"WebsocketServer error : {ex.Message} in RemoveSocket");
+            }
+            finally
+            {
                 _semaphore.Release();
             }
-            catch (Exception e)
-            {
-                Console.WriteLine(e.Message + "WebSocketServer_CloseStreamTargetEndPoint()");
-                _semaphore.Release();
-            }
-        }
-
-		public async Task OpenStreamTargetEndPoint(string path)
-		{
-            DeleteURL.Remove(path);
-        }
-
-        public async Task RemoveSocket(System.Net.WebSockets.WebSocket socket, string path)
-        {
-            if (wsClientsDict.TryGetValue(path, out var clients))
-            {
-                clients.Remove(socket);
-            }
-
-            // 안전하게 WebSocket 닫기
-            if (socket.State == WebSocketState.Open || socket.State == WebSocketState.CloseReceived)
-            {
-                await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Connection closed by server", CancellationToken.None);
-            }
-
-            socket.Dispose();
-            Console.WriteLine($"Socket removed: {path}");
         }
     }
 }
