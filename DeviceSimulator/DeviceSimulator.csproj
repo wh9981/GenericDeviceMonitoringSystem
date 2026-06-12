@@ -86,8 +86,9 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </ApplicationDefinition>
+    <Compile Include="Management\SimulatorManager.cs" />
     <Compile Include="Management\SimulatorRunState.cs" />
-    <Compile Include="Management\IDeviceSimulator.cs" />
+    <Compile Include="Management\ISimulator.cs" />
     <Compile Include="Management\PeerConnectionState.cs" />
     <Compile Include="util\BinaryFileReader.cs" />
     <Compile Include="util\CircularQueue.cs" />
